@@ -1,0 +1,3 @@
+FLASK_APP=app:create_app
+FLASK_DEBUG=0
+FLASK_RUN_PORT=3000
