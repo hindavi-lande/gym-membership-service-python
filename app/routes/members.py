@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from app.services import member_service
+from app.services import member_service, renewal_service
 
 members_bp = Blueprint("members", __name__, url_prefix="/api")
 
@@ -27,6 +27,12 @@ def get_member(member_id):
 def update_member(member_id):
     member = member_service.update_member(member_id, _json_body())
     return jsonify(member.to_dict())
+
+
+@members_bp.post("/members/<int:member_id>/renew")
+def renew_member(member_id):
+    renewal_date = renewal_service.renew_member(member_id)
+    return jsonify({"renewalDate": renewal_date.isoformat()})
 
 
 @members_bp.delete("/members/<int:member_id>")

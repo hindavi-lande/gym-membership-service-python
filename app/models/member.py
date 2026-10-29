@@ -34,6 +34,7 @@ class Member(db.Model):
         default="ACTIVE",
     )
     joined_at = db.Column(db.Date, nullable=False, default=date.today)
+    renewal_date = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
     updated_at = db.Column(
         db.DateTime,
@@ -54,4 +55,5 @@ class Member(db.Model):
             "joinedAt": self.joined_at.isoformat() if self.joined_at else None,
             "createdAt": _iso_datetime(self.created_at),
             "updatedAt": _iso_datetime(self.updated_at),
+            "renewalDate": self.renewal_date.isoformat() if self.renewal_date else None,
         }
