@@ -1,6 +1,9 @@
+from urllib.error import URLError
+
 import pytest
 
 from app import create_app
+from app.clients import payments_client
 from app.extensions import db
 
 
@@ -25,3 +28,13 @@ def app():
 @pytest.fixture()
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def no_payments_service(monkeypatch):
+    """Keep the whole suite offline: every lookup fails like an unreachable service."""
+
+    def _unreachable(*args, **kwargs):
+        raise URLError("payments service unavailable")
+
+    monkeypatch.setattr(payments_client, "urlopen", _unreachable)

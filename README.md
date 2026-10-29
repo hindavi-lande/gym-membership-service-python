@@ -50,10 +50,26 @@ flask run
 - `GET /api/health` — liveness check
 - `POST /api/members` — `{ "firstName", "lastName", "email", "phone", "membershipPlan" }` —
   firstName, lastName, email required; email must be unique
-- `GET /api/members` — list all
-- `GET /api/members/:id` — get one (`404` if missing)
+- `GET /api/members` — list all (each member without `tier` or `spend`)
+- `GET /api/members/:id` — get one (`404` if missing) — the stored fields plus the loyalty
+  `tier` and `spend` (see below)
 - `PUT /api/members/:id` — partial update
 - `DELETE /api/members/:id`
+
+### Loyalty tier on a single member
+
+`GET /api/members/:id` adds two fields to the member payload: `tier` and `spend`. The spend comes
+from `GET /api/payments/member/:memberId/spend` on gym-payments-service-python and is a JSON
+number rounded to cents; the tier is derived from that rounded spend:
+
+- `BRONZE` — spend below 100 (including 0 and negative spend)
+- `SILVER` — spend from 100 up to, but not including, 500
+- `GOLD` — spend of 500 or more
+
+If the payments service times out (2 second timeout, no retries), cannot be reached, answers with
+an error status or sends a body that cannot be read, the request still returns `200` with
+`"tier": "UNAVAILABLE"` and `"spend": null`. The members list is unaffected.
+
 ## Tests
 
 ```
