@@ -41,6 +41,12 @@ def renew_member(member_id):
     return jsonify(member.to_dict())
 
 
+@members_bp.post("/members/<int:member_id>/cancel")
+def cancel_member(member_id):
+    result = member_service.cancel_member(member_id, _json_body())
+    return jsonify(result), 200
+
+
 def _json_body():
     body = request.get_json(silent=True)
     return {} if body is None else body

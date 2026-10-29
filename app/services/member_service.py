@@ -1,6 +1,6 @@
 import re
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.exc import IntegrityError
 
@@ -17,6 +17,10 @@ PLAN_PRICES: dict[str, Decimal] = {
     "STANDARD": Decimal("49.99"),
     "PREMIUM": Decimal("79.99"),
 }
+NOT_ELIGIBLE = "NOT_ELIGIBLE"
+REFUNDABLE_PERIOD_DAYS = 30
+CANCEL_REFUND_STATUSES: frozenset[str] = frozenset({"SUCCESS", "PENDING", "FAILED"})
+CENT = Decimal("0.01")
 
 
 def list_members():
@@ -70,7 +74,7 @@ def renew_member(member_id: int) -> Member:
         "reason": f"{member.membership_plan} plan renewal",
     }
     try:
-        payments_client.charge(payload)
+        charge_body = payments_client.charge(payload)
     except ApiError as exc:
         if exc.status_code == 402:
             raise ApiError(
@@ -79,11 +83,101 @@ def renew_member(member_id: int) -> Member:
             ) from exc
         raise
 
+    member.renewal_payment_id = charge_body.get("id") if isinstance(charge_body, dict) else None
     member.renewal_date = datetime.now(UTC).date() + timedelta(days=30)
     db.session.commit()
     db.session.refresh(member)
     return member
 
+
+def cancel_member(member_id: int, payload: dict | None = None) -> dict:
+    member = get_member(member_id)
+
+    if payload is not None and not isinstance(payload, dict):
+        raise ApiError(400, "Request body must be a JSON object")
+    requested_status = None
+    if payload and "status" in payload:
+        requested_status = _enum_value(payload["status"], CANCEL_REFUND_STATUSES, "status")
+
+    result = {
+        "memberId": member.id,
+        "status": NOT_ELIGIBLE,
+        "amount": None,
+        "paymentId": None,
+        "refundFollowUpRequired": False,
+        "message": "",
+    }
+
+    if member.status == "INACTIVE":
+        result["message"] = f"Member with id {member.id} is already INACTIVE"
+        return result
+
+    if member.renewal_payment_id is None or member.renewal_date is None:
+        _deactivate(member)
+        result["message"] = f"Member with id {member.id} has no paid current period to refund"
+        return result
+
+    remaining_days = (member.renewal_date - date.today()).days
+    if remaining_days <= 0:
+        _deactivate(member)
+        result["message"] = f"Member with id {member.id} has no unused days to refund"
+        return result
+
+    amount = _refund_amount(member.membership_plan, remaining_days)
+    _deactivate(member)
+
+    refund_payload = {
+        "memberId": member.id,
+        "amount": float(amount),
+        "reason": f"{member.membership_plan} plan cancellation refund",
+        "relatedPaymentId": member.renewal_payment_id,
+    }
+    if requested_status is not None:
+        refund_payload["status"] = requested_status
+
+    try:
+        refund_body = payments_client.refund(refund_payload)
+    except ApiError as exc:
+        result["status"] = "FAILED"
+        result["amount"] = float(amount)
+        result["refundFollowUpRequired"] = True
+        result["message"] = (
+            f"Refund for member {member.id} failed: {exc.message}. Follow up required."
+        )
+        return result
+
+    refund_status = "SUCCESS"
+    if isinstance(refund_body, dict) and refund_body.get("status") in CANCEL_REFUND_STATUSES:
+        refund_status = refund_body["status"]
+
+    result["status"] = refund_status
+    result["amount"] = float(amount)
+    if isinstance(refund_body, dict):
+        result["paymentId"] = refund_body.get("id")
+
+    if refund_status == "FAILED":
+        result["refundFollowUpRequired"] = True
+        result["message"] = (
+            f"Refund for member {member.id} failed: the refund was reported as FAILED. "
+            "Follow up required."
+        )
+    else:
+        result["message"] = (
+            f"{member.membership_plan} plan cancellation refund of {amount} recorded"
+        )
+    return result
+
+
+def _refund_amount(plan: str, remaining_days: int) -> Decimal:
+    days = min(remaining_days, REFUNDABLE_PERIOD_DAYS)
+    return (PLAN_PRICES[plan] * days / REFUNDABLE_PERIOD_DAYS).quantize(
+        CENT, rounding=ROUND_HALF_UP
+    )
+
+
+def _deactivate(member) -> None:
+    member.status = "INACTIVE"
+    db.session.commit()
 
 
 def _validate_member_payload(payload, partial):
@@ -149,7 +243,6 @@ def _parse_date(value, field):
         return date.fromisoformat(value)
     except ValueError as exc:
         raise ApiError(400, f"{field} must be an ISO date (YYYY-MM-DD)") from exc
-
 
 
 def _ensure_email_available(email, exclude_id=None):

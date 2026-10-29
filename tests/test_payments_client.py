@@ -74,3 +74,64 @@ def test_charge_raises_503_when_the_service_is_unreachable(app, monkeypatch):
         payments_client.charge(payload)
 
     assert excinfo.value.status_code == 503
+
+
+refund_payload = {
+    "memberId": 1,
+    "amount": 14.99,
+    "reason": "BASIC plan cancellation refund",
+    "relatedPaymentId": 1,
+}
+
+
+def test_refund_posts_to_the_refund_path(app, monkeypatch):
+    recorded = {
+        "id": 2,
+        "memberId": 1,
+        "amount": 14.99,
+        "type": "REFUND",
+        "status": "SUCCESS",
+        "relatedPaymentId": 1,
+    }
+    calls = stub_post(monkeypatch, FakeResponse(201, recorded))
+
+    body = payments_client.refund(refund_payload)
+
+    assert body == recorded
+    assert calls == [
+        {
+            "url": app.config["PAYMENTS_SERVICE_URL"].rstrip("/") + "/api/payments/refund",
+            "json": refund_payload,
+            "timeout": payments_client.REQUEST_TIMEOUT,
+        }
+    ]
+
+
+def test_refund_does_not_duplicate_a_trailing_slash(app, monkeypatch):
+    app.config["PAYMENTS_SERVICE_URL"] = "http://localhost:3001/"
+    calls = stub_post(monkeypatch, FakeResponse(200, {"id": 1}))
+
+    payments_client.refund(refund_payload)
+
+    assert calls[0]["url"] == "http://localhost:3001/api/payments/refund"
+
+
+def test_refund_raises_502_for_a_rejected_refund(app, monkeypatch):
+    stub_post(monkeypatch, FakeResponse(422, {"message": "refund exceeds the linked charge"}))
+
+    with pytest.raises(ApiError) as excinfo:
+        payments_client.refund(refund_payload)
+
+    assert excinfo.value.status_code == 502
+
+
+def test_refund_raises_503_when_the_service_is_unreachable(app, monkeypatch):
+    def failing_post(url, json=None, timeout=None):
+        raise payments_client.requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(payments_client.requests, "post", failing_post)
+
+    with pytest.raises(ApiError) as excinfo:
+        payments_client.refund(refund_payload)
+
+    assert excinfo.value.status_code == 503
