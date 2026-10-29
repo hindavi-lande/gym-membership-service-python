@@ -1,8 +1,10 @@
 import re
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError
 
+from app.clients import payments_client
 from app.errors import ApiError
 from app.extensions import db
 from app.models import Member
@@ -10,6 +12,11 @@ from app.models import Member
 MEMBERSHIP_PLANS = {"BASIC", "STANDARD", "PREMIUM"}
 MEMBER_STATUSES = {"ACTIVE", "INACTIVE", "SUSPENDED"}
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PLAN_PRICES: dict[str, Decimal] = {
+    "BASIC": Decimal("29.99"),
+    "STANDARD": Decimal("49.99"),
+    "PREMIUM": Decimal("79.99"),
+}
 
 
 def list_members():
@@ -53,6 +60,29 @@ def delete_member(member_id):
     member = get_member(member_id)
     db.session.delete(member)
     db.session.commit()
+
+
+def renew_member(member_id: int) -> Member:
+    member = get_member(member_id)
+    payload = {
+        "memberId": member.id,
+        "amount": float(PLAN_PRICES[member.membership_plan]),
+        "reason": f"{member.membership_plan} plan renewal",
+    }
+    try:
+        payments_client.charge(payload)
+    except ApiError as exc:
+        if exc.status_code == 402:
+            raise ApiError(
+                402,
+                f"Member with id {member.id} was not renewed: payment was declined",
+            ) from exc
+        raise
+
+    member.renewal_date = datetime.now(UTC).date() + timedelta(days=30)
+    db.session.commit()
+    db.session.refresh(member)
+    return member
 
 
 
