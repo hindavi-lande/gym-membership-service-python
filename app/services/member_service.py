@@ -1,14 +1,22 @@
 import re
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError
 
+from app.clients import payments_client
 from app.errors import ApiError
 from app.extensions import db
 from app.models import Member
 
 MEMBERSHIP_PLANS = {"BASIC", "STANDARD", "PREMIUM"}
 MEMBER_STATUSES = {"ACTIVE", "INACTIVE", "SUSPENDED"}
+PLAN_PRICES = {
+    "BASIC": Decimal("29.99"),
+    "STANDARD": Decimal("49.99"),
+    "PREMIUM": Decimal("79.99"),
+}
+RENEWAL_PERIOD_DAYS = 30
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -45,6 +53,23 @@ def update_member(member_id, payload):
         setattr(member, field, value)
 
     _commit_or_duplicate_email()
+    db.session.refresh(member)
+    return member
+
+
+def renew_member(member_id):
+    member = get_member(member_id)
+
+    payments_client.charge(
+        {
+            "memberId": member.id,
+            "amount": float(PLAN_PRICES[member.membership_plan]),
+            "reason": f"{member.membership_plan} plan renewal",
+        }
+    )
+
+    member.renewal_date = datetime.now(UTC).date() + timedelta(days=RENEWAL_PERIOD_DAYS)
+    db.session.commit()
     db.session.refresh(member)
     return member
 

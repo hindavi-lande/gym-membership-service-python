@@ -29,6 +29,12 @@ def update_member(member_id):
     return jsonify(member.to_dict())
 
 
+@members_bp.post("/members/<int:member_id>/renew")
+def renew_member(member_id):
+    member = member_service.renew_member(member_id)
+    return jsonify(member.to_dict())
+
+
 @members_bp.delete("/members/<int:member_id>")
 def delete_member(member_id):
     member_service.delete_member(member_id)
