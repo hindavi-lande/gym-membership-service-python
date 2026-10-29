@@ -1,6 +1,6 @@
 import re
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.exc import IntegrityError
 
@@ -18,6 +18,8 @@ PLAN_RENEWAL_PRICES = {
     "PREMIUM": Decimal("79.99"),
 }
 RENEWAL_PERIOD_DAYS = 30
+REFUND_PERIOD_DAYS = 30
+CENT = Decimal("0.01")
 
 
 def list_members():
@@ -75,6 +77,112 @@ def renew_member(member_id):
     )
 
     member.renewal_date = datetime.now(UTC).date() + timedelta(days=RENEWAL_PERIOD_DAYS)
+    db.session.commit()
+    db.session.refresh(member)
+    return member
+
+
+def cancel_member(member_id: int) -> dict:
+    member = get_member(member_id)
+
+    if member.status == "INACTIVE":
+        return {
+            "status": "NOT_ELIGIBLE",
+            "amount": None,
+            "paymentId": None,
+            "refundFollowUpRequired": False,
+            "message": "Membership is already inactive",
+        }
+
+    remaining_days = _remaining_days(member)
+    if remaining_days == 0:
+        _deactivate(member)
+        return {
+            "status": "NOT_ELIGIBLE",
+            "amount": None,
+            "paymentId": None,
+            "refundFollowUpRequired": False,
+            "message": "No unused days remain in the current period",
+        }
+
+    try:
+        charge = _latest_successful_charge(member.id)
+    except ApiError:
+        _deactivate(member)
+        return {
+            "status": "FAILED",
+            "amount": None,
+            "paymentId": None,
+            "refundFollowUpRequired": True,
+            "message": "Payments service unavailable, refund follow-up required",
+        }
+
+    if charge is None:
+        _deactivate(member)
+        return {
+            "status": "NOT_ELIGIBLE",
+            "amount": None,
+            "paymentId": None,
+            "refundFollowUpRequired": False,
+            "message": "No paid current period to refund",
+        }
+
+    amount = _refund_amount(member.membership_plan, remaining_days, charge.get("amount"))
+    _deactivate(member)
+
+    try:
+        refund = payments_client.refund(
+            {
+                "memberId": member.id,
+                "amount": float(amount),
+                "reason": f"{member.membership_plan} plan cancellation refund",
+                "relatedPaymentId": charge["id"],
+            }
+        )
+    except ApiError:
+        return {
+            "status": "FAILED",
+            "amount": float(amount),
+            "paymentId": None,
+            "refundFollowUpRequired": True,
+            "message": "Refund failed, follow-up required",
+        }
+
+    return {
+        "status": refund.get("status"),
+        "amount": refund.get("amount"),
+        "paymentId": refund.get("id"),
+        "refundFollowUpRequired": False,
+        "message": None,
+    }
+
+
+def _remaining_days(member: Member) -> int:
+    if member.renewal_date is None:
+        return 0
+    return max(0, (member.renewal_date - datetime.now(UTC).date()).days)
+
+
+def _refund_amount(membership_plan: str, remaining_days: int, charge_amount) -> Decimal:
+    amount = (
+        PLAN_RENEWAL_PRICES[membership_plan]
+        * min(remaining_days, REFUND_PERIOD_DAYS)
+        / REFUND_PERIOD_DAYS
+    ).quantize(CENT, rounding=ROUND_HALF_UP)
+    if charge_amount is not None:
+        amount = min(amount, Decimal(str(charge_amount)))
+    return amount
+
+
+def _latest_successful_charge(member_id: int) -> dict | None:
+    for payment in payments_client.history(member_id):
+        if payment.get("type") == "CHARGE" and payment.get("status") == "SUCCESS":
+            return payment
+    return None
+
+
+def _deactivate(member: Member) -> Member:
+    member.status = "INACTIVE"
     db.session.commit()
     db.session.refresh(member)
     return member
