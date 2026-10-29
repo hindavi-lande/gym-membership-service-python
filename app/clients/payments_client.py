@@ -7,6 +7,7 @@ from flask import current_app
 from app.errors import ApiError
 
 CHARGE_PATH = "/api/payments/charge"
+HISTORY_PATH = "/api/payments/member"
 REQUEST_TIMEOUT_SECONDS = 5
 
 
@@ -32,6 +33,34 @@ def charge(payload: dict) -> dict:
         ) from exc
     except (URLError, OSError, TimeoutError) as exc:
         raise ApiError(503, "Payments service is unavailable") from exc
+
+
+def history_for_member(member_id: int) -> list[dict]:
+    url = (
+        current_app.config["PAYMENTS_SERVICE_URL"].rstrip("/")
+        + HISTORY_PATH
+        + f"/{member_id}"
+    )
+    request = Request(
+        url,
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+
+    try:
+        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            history = json.loads(response.read() or b"[]")
+    except HTTPError as exc:
+        raw = exc.read() or b""
+        raise ApiError(
+            502, _message_from_error_body(raw, "Payments service returned an error")
+        ) from exc
+    except (URLError, OSError, TimeoutError) as exc:
+        raise ApiError(503, "Payments service is unavailable") from exc
+
+    if not isinstance(history, list):
+        raise ApiError(502, "Payments service returned an error")
+    return history
 
 
 def _message_from_error_body(raw: bytes, fallback: str) -> str:

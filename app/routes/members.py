@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from app.services import member_service
 
@@ -21,6 +21,11 @@ def create_member():
 def get_member(member_id):
     member = member_service.get_member(member_id)
     return jsonify(member.to_dict())
+
+
+@members_bp.get("/members/<int:member_id>/payments")
+def get_member_payments(member_id: int) -> tuple[Response, int]:
+    return jsonify(member_service.get_member_payment_history(member_id)), 200
 
 
 @members_bp.put("/members/<int:member_id>")

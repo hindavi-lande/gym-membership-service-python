@@ -18,6 +18,7 @@ PLAN_PRICES = {
 }
 RENEWAL_PERIOD_DAYS = 30
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PAYMENT_HISTORY_ERROR = "Payment history is unavailable"
 
 
 def list_members():
@@ -72,6 +73,21 @@ def renew_member(member_id):
     db.session.commit()
     db.session.refresh(member)
     return member
+
+
+def get_member_payment_history(member_id: int) -> dict:
+    member = get_member(member_id)
+
+    try:
+        history = payments_client.history_for_member(member.id)
+    except ApiError:
+        return {
+            "member": member.to_dict(),
+            "payments": [],
+            "paymentHistoryError": PAYMENT_HISTORY_ERROR,
+        }
+
+    return {"member": member.to_dict(), "payments": _annotate_history(history)}
 
 
 def delete_member(member_id):
@@ -144,6 +160,53 @@ def _parse_date(value, field):
         return date.fromisoformat(value)
     except ValueError as exc:
         raise ApiError(400, f"{field} must be an ISO date (YYYY-MM-DD)") from exc
+
+
+def _annotate_history(history: list[dict]) -> list[dict]:
+    refunded_totals = _refunded_totals(history)
+
+    annotated = []
+    for payment in history:
+        row = dict(payment)
+        if row.get("type") == "CHARGE":
+            charge_id = _as_int(row.get("id"))
+            refunded = refunded_totals.get(charge_id, Decimal("0"))
+            row["refundedAmount"] = float(refunded)
+        annotated.append(row)
+
+    return sorted(annotated, key=_history_sort_key, reverse=True)
+
+
+def _refunded_totals(history: list[dict]) -> dict[int, Decimal]:
+    totals = {}
+    for row in history:
+        related_id = _as_int(row.get("relatedPaymentId"))
+        if related_id is None:
+            continue
+        amount = row.get("amount")
+        if amount is None:
+            continue
+        try:
+            value = Decimal(str(amount))
+        except (ArithmeticError, ValueError):
+            continue
+        totals[related_id] = totals.get(related_id, Decimal("0")) + value
+    return totals
+
+
+def _history_sort_key(payment: dict) -> tuple[str, int]:
+    created_at = payment.get("createdAt") or ""
+    payment_id = _as_int(payment.get("id"))
+    return created_at, payment_id if payment_id is not None else 0
+
+
+def _as_int(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 
