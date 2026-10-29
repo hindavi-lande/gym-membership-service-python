@@ -34,6 +34,7 @@ class Member(db.Model):
         default="ACTIVE",
     )
     joined_at = db.Column(db.Date, nullable=False, default=date.today)
+    renewal_date = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
     updated_at = db.Column(
         db.DateTime,
@@ -42,7 +43,7 @@ class Member(db.Model):
         onupdate=_utcnow,
     )
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "firstName": self.first_name,
@@ -52,6 +53,7 @@ class Member(db.Model):
             "membershipPlan": self.membership_plan,
             "status": self.status,
             "joinedAt": self.joined_at.isoformat() if self.joined_at else None,
+            "renewalDate": self.renewal_date.isoformat() if self.renewal_date else None,
             "createdAt": _iso_datetime(self.created_at),
             "updatedAt": _iso_datetime(self.updated_at),
         }

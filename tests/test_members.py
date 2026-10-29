@@ -1,3 +1,10 @@
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from app.clients import payments_client
+from app.errors import ApiError
+
 valid_member = {
     "firstName": "Jane",
     "lastName": "Doe",
@@ -139,3 +146,111 @@ def test_unknown_route_returns_404(client):
 
     assert response.status_code == 404
     assert "message" in response.get_json()
+
+
+class RecordedCharges(list):
+    """Charges sent to the payments service, plus a way to make the fake fail."""
+
+    def __init__(self):
+        super().__init__()
+        self.error = None
+
+    def fail_with(self, error):
+        self.error = error
+
+
+@pytest.fixture()
+def recorded_charges(monkeypatch):
+    charges = RecordedCharges()
+
+    def fake_charge(payload):
+        charges.append(payload)
+        if charges.error is not None:
+            raise charges.error
+        return {"status": "SUCCESS"}
+
+    monkeypatch.setattr(payments_client, "charge", fake_charge)
+    return charges
+
+
+@pytest.mark.parametrize(
+    ("plan", "price"),
+    [("BASIC", 29.99), ("STANDARD", 49.99), ("PREMIUM", 79.99)],
+)
+def test_renew_charges_the_current_plan_price_and_reason(client, recorded_charges, plan, price):
+    created = create_member(client, membershipPlan=plan).get_json()
+
+    response = client.post(f"/api/members/{created['id']}/renew")
+
+    assert response.status_code == 200
+    assert len(recorded_charges) == 1
+    assert recorded_charges[0]["memberId"] == created["id"]
+    assert recorded_charges[0]["amount"] == price
+    assert recorded_charges[0]["reason"] == f"{plan} plan renewal"
+
+
+def test_renew_returns_200_and_sets_renewal_date(client, recorded_charges):
+    created = create_member(client).get_json()
+    expected = (datetime.now(UTC).date() + timedelta(days=30)).isoformat()
+
+    response = client.post(f"/api/members/{created['id']}/renew")
+
+    assert response.status_code == 200
+    assert response.get_json()["renewalDate"] == expected
+    assert client.get(f"/api/members/{created['id']}").get_json()["renewalDate"] == expected
+
+
+def test_member_responses_expose_renewal_date(client, recorded_charges):
+    created = create_member(client).get_json()
+    assert created["renewalDate"] is None
+
+    client.post(f"/api/members/{created['id']}/renew")
+
+    listed = client.get("/api/members")
+    assert listed.status_code == 200
+    assert listed.get_json()[0]["renewalDate"] is not None
+    assert client.get(f"/api/members/{created['id']}").get_json()["renewalDate"] == (
+        listed.get_json()[0]["renewalDate"]
+    )
+
+
+def test_renew_returns_402_and_leaves_renewal_date_unchanged(client, recorded_charges):
+    created = create_member(client).get_json()
+
+    recorded_charges.fail_with(ApiError(402, "payment declined"))
+    response = client.post(f"/api/members/{created['id']}/renew")
+
+    assert response.status_code == 402
+    assert response.get_json()["message"] == "payment declined"
+    fetched = client.get(f"/api/members/{created['id']}")
+    assert fetched.get_json()["renewalDate"] is None
+
+
+def test_renew_returns_503_and_leaves_renewal_date_unchanged(client, recorded_charges):
+    created = create_member(client).get_json()
+
+    recorded_charges.fail_with(ApiError(503, "payments service unavailable"))
+    response = client.post(f"/api/members/{created['id']}/renew")
+
+    assert response.status_code == 503
+    assert response.get_json()["message"] == "payments service unavailable"
+    fetched = client.get(f"/api/members/{created['id']}")
+    assert fetched.get_json()["renewalDate"] is None
+
+
+def test_renew_returns_404_and_does_not_call_payments(client, recorded_charges):
+    response = client.post("/api/members/999999/renew")
+
+    assert response.status_code == 404
+    assert recorded_charges == []
+
+
+def test_a_suspended_member_can_renew(client, recorded_charges):
+    created = create_member(client).get_json()
+    client.put(f"/api/members/{created['id']}", json={"status": "SUSPENDED"})
+
+    response = client.post(f"/api/members/{created['id']}/renew")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "SUSPENDED"
+    assert len(recorded_charges) == 1

@@ -35,6 +35,12 @@ def delete_member(member_id):
     return "", 204
 
 
+@members_bp.post("/members/<int:member_id>/renew")
+def renew_member(member_id):
+    member = member_service.renew_member(member_id)
+    return jsonify(member.to_dict()), 200
+
+
 def _json_body():
     body = request.get_json(silent=True)
     return {} if body is None else body
