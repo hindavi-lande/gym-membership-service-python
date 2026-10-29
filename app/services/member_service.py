@@ -31,6 +31,33 @@ def get_member(member_id):
     return member
 
 
+def get_member_with_payments(member_id) -> dict:
+    member = get_member(member_id)
+
+    try:
+        payments = payments_client.get_history(member.id)
+    except ApiError as exc:
+        return {
+            "member": member.to_dict(),
+            "payments": [],
+            "paymentHistoryError": exc.message,
+        }
+
+    return {"member": member.to_dict(), "payments": _sort_payments(payments)}
+
+
+def _sort_payments(payments) -> list[dict]:
+    """Order payments by createdAt descending, then id descending."""
+    return sorted(
+        payments,
+        key=lambda payment: (
+            str(payment.get("createdAt") or ""),
+            payment.get("id") or 0,
+        ),
+        reverse=True,
+    )
+
+
 def create_member(payload):
     data = _validate_member_payload(payload, partial=False)
     _ensure_email_available(data["email"])

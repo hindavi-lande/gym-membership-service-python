@@ -9,6 +9,32 @@ TIMEOUT_SECONDS = 5
 
 CHARGE_PATH = "/api/payments/charge"
 
+HISTORY_PATH_TEMPLATE = "/api/payments/member/{member_id}"
+
+
+def get_history(member_id: int) -> list[dict]:
+    """GET a member's payment history from the payments service.
+
+    Raises ApiError(503) when the payments service cannot be reached, answers
+    an error status, or returns a body that is not a list of payments.
+    """
+    base_url = current_app.config["PAYMENTS_SERVICE_URL"]
+    url = f"{base_url}{HISTORY_PATH_TEMPLATE.format(member_id=member_id)}"
+    http_request = request.Request(url, method="GET")
+
+    try:
+        with request.urlopen(http_request, timeout=TIMEOUT_SECONDS) as response:
+            body = _decode(response.read())
+    except error.HTTPError as exc:
+        raise ApiError(503, "payments service unavailable") from exc
+    except (OSError, ValueError) as exc:
+        # urllib.error.URLError is an OSError; JSONDecodeError is a ValueError.
+        raise ApiError(503, "payments service unavailable") from exc
+
+    if not isinstance(body, list):
+        raise ApiError(503, "payments service unavailable")
+    return body
+
 
 def charge(payload: dict) -> dict:
     """POST a charge to the payments service and return its JSON response.

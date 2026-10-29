@@ -102,7 +102,7 @@ def test_get_member_by_id(client):
     response = client.get(f"/api/members/{created['id']}")
 
     assert response.status_code == 200
-    assert response.get_json()["email"] == valid_member["email"]
+    assert response.get_json()["member"]["email"] == valid_member["email"]
 
 
 def test_get_member_returns_404_for_unknown_id(client):
@@ -146,6 +146,88 @@ def test_unknown_route_returns_404(client):
 
     assert response.status_code == 404
     assert "message" in response.get_json()
+
+
+def test_get_member_returns_member_and_payments(client, payments_history):
+    created = create_member(client).get_json()
+
+    response = client.get(f"/api/members/{created['id']}")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert set(body) == {"member", "payments"}
+    assert body["member"]["id"] == created["id"]
+    assert body["member"]["renewalDate"] == created["renewalDate"]
+    assert payments_history.member_ids == [created["id"]]
+
+
+def test_get_member_returns_empty_payments_when_member_has_none(client, payments_history):
+    created = create_member(client).get_json()
+    payments_history.set([])
+
+    response = client.get(f"/api/members/{created['id']}")
+
+    assert response.status_code == 200
+    assert response.get_json()["payments"] == []
+
+
+def test_get_member_orders_payments_by_created_at_then_id_desc(client, payments_history):
+    created = create_member(client).get_json()
+    payments_history.set(
+        [
+            {"id": 1, "createdAt": "2024-01-01T00:00:00Z"},
+            {"id": 3, "createdAt": "2024-03-01T00:00:00Z"},
+            {"id": 2, "createdAt": "2024-03-01T00:00:00Z"},
+            {"id": 4},
+        ]
+    )
+
+    response = client.get(f"/api/members/{created['id']}")
+
+    assert response.status_code == 200
+    assert [payment["id"] for payment in response.get_json()["payments"]] == [3, 2, 1, 4]
+
+
+def test_get_member_passes_refunded_amounts_through_unchanged(client, payments_history):
+    created = create_member(client).get_json()
+    payments_history.set(
+        [
+            {
+                "id": 1,
+                "type": "CHARGE",
+                "createdAt": "2024-01-01T00:00:00Z",
+                "refundedAmount": 7.5,
+            }
+        ]
+    )
+
+    response = client.get(f"/api/members/{created['id']}")
+
+    assert response.status_code == 200
+    payments = response.get_json()["payments"]
+    assert len(payments) == 1
+    assert payments[0]["refundedAmount"] == 7.5
+
+
+def test_get_member_returns_404_without_calling_payments(client, payments_history):
+    response = client.get("/api/members/999999")
+
+    assert response.status_code == 404
+    assert payments_history.member_ids == []
+
+
+def test_get_member_falls_back_when_payments_service_fails(client, payments_history):
+    created = create_member(client).get_json()
+    payments_history.fail_with(ApiError(503, "payments service unavailable"))
+
+    response = client.get(f"/api/members/{created['id']}")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert set(body) == {"member", "payments", "paymentHistoryError"}
+    assert body["member"]["id"] == created["id"]
+    assert body["payments"] == []
+    assert body["paymentHistoryError"] == "payments service unavailable"
 
 
 class RecordedCharges(list):
@@ -197,7 +279,9 @@ def test_renew_returns_200_and_sets_renewal_date(client, recorded_charges):
 
     assert response.status_code == 200
     assert response.get_json()["renewalDate"] == expected
-    assert client.get(f"/api/members/{created['id']}").get_json()["renewalDate"] == expected
+    assert client.get(f"/api/members/{created['id']}").get_json()["member"]["renewalDate"] == (
+        expected
+    )
 
 
 def test_member_responses_expose_renewal_date(client, recorded_charges):
@@ -209,7 +293,7 @@ def test_member_responses_expose_renewal_date(client, recorded_charges):
     listed = client.get("/api/members")
     assert listed.status_code == 200
     assert listed.get_json()[0]["renewalDate"] is not None
-    assert client.get(f"/api/members/{created['id']}").get_json()["renewalDate"] == (
+    assert client.get(f"/api/members/{created['id']}").get_json()["member"]["renewalDate"] == (
         listed.get_json()[0]["renewalDate"]
     )
 
@@ -223,7 +307,7 @@ def test_renew_returns_402_and_leaves_renewal_date_unchanged(client, recorded_ch
     assert response.status_code == 402
     assert response.get_json()["message"] == "payment declined"
     fetched = client.get(f"/api/members/{created['id']}")
-    assert fetched.get_json()["renewalDate"] is None
+    assert fetched.get_json()["member"]["renewalDate"] is None
 
 
 def test_renew_returns_503_and_leaves_renewal_date_unchanged(client, recorded_charges):
@@ -235,7 +319,7 @@ def test_renew_returns_503_and_leaves_renewal_date_unchanged(client, recorded_ch
     assert response.status_code == 503
     assert response.get_json()["message"] == "payments service unavailable"
     fetched = client.get(f"/api/members/{created['id']}")
-    assert fetched.get_json()["renewalDate"] is None
+    assert fetched.get_json()["member"]["renewalDate"] is None
 
 
 def test_renew_returns_404_and_does_not_call_payments(client, recorded_charges):
