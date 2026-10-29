@@ -3,6 +3,7 @@ from datetime import date
 
 from sqlalchemy.exc import IntegrityError
 
+from app.clients import payments
 from app.errors import ApiError
 from app.extensions import db
 from app.models import Member
@@ -54,6 +55,31 @@ def delete_member(member_id):
     db.session.delete(member)
     db.session.commit()
 
+
+def merge_member(member_id: int, payload: dict) -> Member:
+    duplicate_id = _parse_duplicate_member_id(payload)
+
+    kept = get_member(member_id)
+    duplicate = get_member(duplicate_id)
+
+    if duplicate_id == kept.id:
+        raise ApiError(400, "duplicateMemberId must differ from the member being kept")
+
+    payments.merge_payments(duplicate.id, kept.id)
+
+    db.session.delete(duplicate)
+    db.session.commit()
+    return kept
+
+
+def _parse_duplicate_member_id(payload: dict) -> int:
+    if not isinstance(payload, dict):
+        raise ApiError(400, "Request body must be a JSON object")
+
+    value = payload.get("duplicateMemberId")
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ApiError(400, "duplicateMemberId must be a positive integer")
+    return value
 
 
 def _validate_member_payload(payload, partial):
