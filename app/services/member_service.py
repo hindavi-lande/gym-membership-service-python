@@ -1,8 +1,10 @@
 import re
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy.exc import IntegrityError
 
+from app.clients import payments_client
 from app.errors import ApiError
 from app.extensions import db
 from app.models import Member
@@ -10,6 +12,9 @@ from app.models import Member
 MEMBERSHIP_PLANS = {"BASIC", "STANDARD", "PREMIUM"}
 MEMBER_STATUSES = {"ACTIVE", "INACTIVE", "SUSPENDED"}
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+TIER_UNAVAILABLE = "UNAVAILABLE"
+SILVER_TIER_CENTS = 10000
+GOLD_TIER_CENTS = 50000
 
 
 def list_members():
@@ -21,6 +26,30 @@ def get_member(member_id):
     if member is None:
         raise ApiError(404, f"Member with id {member_id} not found")
     return member
+
+
+def loyalty_tier(spend: Decimal | None) -> str:
+    if spend is None:
+        return TIER_UNAVAILABLE
+
+    cents = int(
+        (Decimal(str(spend)) * 100).to_integral_value(rounding=ROUND_HALF_UP)
+    )
+    if cents >= GOLD_TIER_CENTS:
+        return "GOLD"
+    if cents >= SILVER_TIER_CENTS:
+        return "SILVER"
+    return "BRONZE"
+
+
+def get_member_profile(member_id: int) -> dict:
+    member = get_member(member_id)
+    spend = payments_client.get_spend(member_id)
+    return {
+        **member.to_dict(),
+        "tier": loyalty_tier(spend),
+        "spend": float(spend) if spend is not None else None,
+    }
 
 
 def create_member(payload):

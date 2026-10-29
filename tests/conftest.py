@@ -1,6 +1,7 @@
 import pytest
 
 from app import create_app
+from app.clients import payments_client
 from app.extensions import db
 
 
@@ -25,3 +26,8 @@ def app():
 @pytest.fixture()
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def stub_payments_spend(monkeypatch) -> None:
+    monkeypatch.setattr(payments_client, "get_spend", lambda member_id: None)

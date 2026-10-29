@@ -19,8 +19,8 @@ def create_member():
 
 @members_bp.get("/members/<int:member_id>")
 def get_member(member_id):
-    member = member_service.get_member(member_id)
-    return jsonify(member.to_dict())
+    profile = member_service.get_member_profile(member_id)
+    return jsonify(profile)
 
 
 @members_bp.put("/members/<int:member_id>")
