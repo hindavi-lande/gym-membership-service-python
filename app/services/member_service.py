@@ -3,6 +3,7 @@ from datetime import date
 
 from sqlalchemy.exc import IntegrityError
 
+from app.clients import payments_client
 from app.errors import ApiError
 from app.extensions import db
 from app.models import Member
@@ -47,6 +48,36 @@ def update_member(member_id, payload):
     _commit_or_duplicate_email()
     db.session.refresh(member)
     return member
+
+
+def merge_member(to_member_id: int, payload: dict) -> Member:
+    from_member_id = _parse_from_member_id(payload)
+
+    if from_member_id == to_member_id:
+        raise ApiError(400, "A member account cannot be merged into itself")
+
+    kept = get_member(to_member_id)
+    duplicate = get_member(from_member_id)
+
+    try:
+        payments_client.merge_payments(from_member_id, to_member_id)
+    except ApiError:
+        db.session.rollback()
+        raise
+
+    db.session.delete(duplicate)
+    db.session.commit()
+    return kept
+
+
+def _parse_from_member_id(payload: dict) -> int:
+    if not isinstance(payload, dict):
+        raise ApiError(400, "Request body must be a JSON object")
+
+    value = payload.get("fromMemberId")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ApiError(400, "fromMemberId must be a positive integer")
+    return value
 
 
 def delete_member(member_id):
