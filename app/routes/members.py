@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from app.services import member_service
 
@@ -33,6 +33,12 @@ def update_member(member_id):
 def delete_member(member_id):
     member_service.delete_member(member_id)
     return "", 204
+
+
+@members_bp.post("/members/merge")
+def merge_members() -> tuple[Response, int]:
+    member = member_service.merge_members(_json_body())
+    return jsonify(member.to_dict()), 200
 
 
 def _json_body():

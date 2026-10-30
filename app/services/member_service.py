@@ -3,6 +3,7 @@ from datetime import date
 
 from sqlalchemy.exc import IntegrityError
 
+from app.clients import payments_client
 from app.errors import ApiError
 from app.extensions import db
 from app.models import Member
@@ -16,10 +17,10 @@ def list_members():
     return db.session.scalars(db.select(Member).order_by(Member.id)).all()
 
 
-def get_member(member_id):
+def get_member(member_id, field_name="Member"):
     member = db.session.get(Member, member_id)
     if member is None:
-        raise ApiError(404, f"Member with id {member_id} not found")
+        raise ApiError(404, f"{field_name} with id {member_id} not found")
     return member
 
 
@@ -54,6 +55,52 @@ def delete_member(member_id):
     db.session.delete(member)
     db.session.commit()
 
+
+def merge_members(payload: dict) -> Member:
+    data = _validate_merge_payload(payload)
+
+    kept = get_member(data["kept_member_id"])
+    duplicate = get_member(
+        data["duplicate_member_id"], field_name="duplicateMemberId"
+    )
+
+    if kept.id == duplicate.id:
+        raise ApiError(400, "keptMemberId and duplicateMemberId must be different")
+
+    payments_client.merge_payments(duplicate.id, kept.id)
+
+    try:
+        db.session.delete(duplicate)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        raise ApiError(500, "failed to merge members") from exc
+
+    db.session.refresh(kept)
+    return kept
+
+
+def _validate_merge_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ApiError(400, "Request body must be a JSON object")
+
+    duplicate_member_id = _parse_positive_int(
+        payload.get("duplicateMemberId"), "duplicateMemberId"
+    )
+    kept_member_id = _parse_positive_int(
+        payload.get("keptMemberId"), "keptMemberId"
+    )
+
+    return {
+        "kept_member_id": kept_member_id,
+        "duplicate_member_id": duplicate_member_id,
+    }
+
+
+def _parse_positive_int(value, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ApiError(400, f"{field} must be a positive integer")
+    return value
 
 
 def _validate_member_payload(payload, partial):
