@@ -35,6 +35,7 @@ class Member(db.Model):
     )
     joined_at = db.Column(db.Date, nullable=False, default=date.today)
     renewal_date = db.Column(db.Date, nullable=True)
+    last_charge_payment_id = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
     updated_at = db.Column(
         db.DateTime,
@@ -54,6 +55,7 @@ class Member(db.Model):
             "status": self.status,
             "joinedAt": self.joined_at.isoformat() if self.joined_at else None,
             "renewalDate": self.renewal_date.isoformat() if self.renewal_date else None,
+            "lastChargePaymentId": self.last_charge_payment_id,
             "createdAt": _iso_datetime(self.created_at),
             "updatedAt": _iso_datetime(self.updated_at),
         }
