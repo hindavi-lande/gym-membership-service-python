@@ -12,3 +12,4 @@ class Config:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     PAYMENTS_SERVICE_URL = os.getenv("PAYMENTS_SERVICE_URL", "http://localhost:3001")
+    PAYMENTS_SERVICE_TIMEOUT = float(os.getenv("PAYMENTS_SERVICE_TIMEOUT", "2"))

@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from app.services import member_service
+from app.services import member_service, tier_service
 
 members_bp = Blueprint("members", __name__, url_prefix="/api")
 
@@ -20,7 +20,9 @@ def create_member():
 @members_bp.get("/members/<int:member_id>")
 def get_member(member_id):
     member = member_service.get_member(member_id)
-    return jsonify(member.to_dict())
+    body = member.to_dict()
+    body.update(tier_service.tier_and_spend(member.id))
+    return jsonify(body)
 
 
 @members_bp.put("/members/<int:member_id>")
