@@ -23,6 +23,11 @@ def get_member(member_id):
     return jsonify(member.to_dict())
 
 
+@members_bp.get("/members/<int:member_id>/details")
+def get_member_details(member_id):
+    return jsonify(member_service.get_member_details(member_id)), 200
+
+
 @members_bp.put("/members/<int:member_id>")
 def update_member(member_id):
     member = member_service.update_member(member_id, _json_body())

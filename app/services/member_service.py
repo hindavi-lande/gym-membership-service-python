@@ -19,6 +19,7 @@ PLAN_PRICES = {
     "PREMIUM": Decimal("79.99"),
 }
 RENEWAL_PERIOD_DAYS = 30
+PAYMENT_HISTORY_ERROR_MESSAGE = "Payment history is unavailable"
 
 
 def list_members():
@@ -95,6 +96,25 @@ def renew_member(member_id: int) -> Member:
     return member
 
 
+def get_member_details(member_id) -> dict:
+    member = get_member(member_id)
+
+    try:
+        result = payments_client.get_payment_history(
+            current_app.config["PAYMENTS_SERVICE_URL"], member_id
+        )
+    except payments_client.PaymentsUnavailable:
+        result = None
+
+    if result is None or not 200 <= result.status_code < 300:
+        return {
+            "member": member.to_dict(),
+            "payments": [],
+            "paymentHistoryError": PAYMENT_HISTORY_ERROR_MESSAGE,
+        }
+
+    return {"member": member.to_dict(), "payments": _sorted_payments(result.payments)}
+
 
 def _validate_member_payload(payload, partial):
     if not isinstance(payload, dict):
@@ -160,6 +180,39 @@ def _parse_date(value, field):
     except ValueError as exc:
         raise ApiError(400, f"{field} must be an ISO date (YYYY-MM-DD)") from exc
 
+
+def _sorted_payments(payments: list) -> list:
+    rows = [payment for payment in payments if isinstance(payment, dict)]
+    return sorted(rows, key=_payment_sort_key, reverse=True)
+
+
+def _payment_sort_key(payment: dict) -> tuple:
+    created_at = _created_at_key(payment.get("createdAt"))
+    payment_id = _id_key(payment.get("id"))
+    valid = created_at is not None and payment_id is not None
+    return (
+        valid,
+        created_at if created_at is not None else datetime.min,
+        payment_id if payment_id is not None else 0,
+    )
+
+
+def _created_at_key(value) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed
+
+
+def _id_key(value) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def _ensure_email_available(email, exclude_id=None):
