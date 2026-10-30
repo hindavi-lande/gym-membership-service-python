@@ -1,8 +1,11 @@
 import re
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
+from flask import current_app
 from sqlalchemy.exc import IntegrityError
 
+from app.clients import payments_client
 from app.errors import ApiError
 from app.extensions import db
 from app.models import Member
@@ -10,6 +13,12 @@ from app.models import Member
 MEMBERSHIP_PLANS = {"BASIC", "STANDARD", "PREMIUM"}
 MEMBER_STATUSES = {"ACTIVE", "INACTIVE", "SUSPENDED"}
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+PLAN_PRICES = {
+    "BASIC": Decimal("29.99"),
+    "STANDARD": Decimal("49.99"),
+    "PREMIUM": Decimal("79.99"),
+}
+RENEWAL_PERIOD_DAYS = 30
 
 
 def list_members():
@@ -53,6 +62,37 @@ def delete_member(member_id):
     member = get_member(member_id)
     db.session.delete(member)
     db.session.commit()
+
+
+def renew_member(member_id: int) -> Member:
+    member = get_member(member_id)
+
+    if member.status != "ACTIVE":
+        raise ApiError(409, f"Member with id {member_id} is not active")
+
+    plan = member.membership_plan
+    payload = {
+        "memberId": member.id,
+        "amount": float(PLAN_PRICES[plan]),
+        "reason": f"{plan} plan renewal",
+    }
+
+    try:
+        result = payments_client.post_charge(
+            current_app.config["PAYMENTS_SERVICE_URL"], payload
+        )
+    except payments_client.PaymentsUnavailable as exc:
+        raise ApiError(503, "Payments service is unavailable") from exc
+
+    if result.status_code == 402:
+        raise ApiError(402, "Payment was declined")
+    if not 200 <= result.status_code < 300:
+        raise ApiError(502, "Payments service returned an unexpected response")
+
+    member.renewal_date = datetime.now(UTC).date() + timedelta(days=RENEWAL_PERIOD_DAYS)
+    db.session.commit()
+    db.session.refresh(member)
+    return member
 
 
 
