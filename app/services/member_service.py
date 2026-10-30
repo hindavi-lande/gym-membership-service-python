@@ -1,6 +1,6 @@
 import re
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from flask import current_app
 from sqlalchemy.exc import IntegrityError
@@ -89,11 +89,89 @@ def renew_member(member_id: int) -> Member:
     if not 200 <= result.status_code < 300:
         raise ApiError(502, "Payments service returned an unexpected response")
 
+    charge_id = result.body.get("id")
+    if isinstance(charge_id, int) and not isinstance(charge_id, bool):
+        member.last_charge_payment_id = charge_id
+
     member.renewal_date = datetime.now(UTC).date() + timedelta(days=RENEWAL_PERIOD_DAYS)
     db.session.commit()
     db.session.refresh(member)
     return member
 
+
+
+def cancel_member(member_id: int) -> dict:
+    member = get_member(member_id)
+
+    if member.status == "INACTIVE" or member.renewal_date is None:
+        return _deactivate_member(member, "NOT_ELIGIBLE", 0.0)
+
+    remaining_days = (member.renewal_date - date.today()).days
+    if remaining_days <= 0:
+        return _deactivate_member(member, "NOT_ELIGIBLE", 0.0)
+
+    plan = member.membership_plan
+    amount = _prorated_refund(plan, remaining_days)
+    payload = {
+        "memberId": member.id,
+        "amount": float(amount),
+        "reason": f"{plan} plan cancellation refund",
+    }
+    if member.last_charge_payment_id is not None:
+        payload["relatedPaymentId"] = member.last_charge_payment_id
+
+    try:
+        result = payments_client.post_refund(
+            current_app.config["PAYMENTS_SERVICE_URL"], payload
+        )
+    except payments_client.PaymentsUnavailable as exc:
+        raise ApiError(503, "Payments service is unavailable") from exc
+
+    if 400 <= result.status_code < 500:
+        raise ApiError(result.status_code, result.body.get("message") or "Refund was rejected")
+    if not 200 <= result.status_code < 300:
+        raise ApiError(502, "Payments service returned an unexpected response")
+
+    refund_status = result.body.get("status") or "SUCCESS"
+    follow_up = refund_status == "FAILED"
+    message = "Refund failed; follow-up required" if follow_up else None
+
+    member.status = "INACTIVE"
+    db.session.commit()
+    db.session.refresh(member)
+
+    return {
+        "memberId": member.id,
+        "memberStatus": member.status,
+        "status": refund_status,
+        "amount": float(amount),
+        "paymentId": result.body.get("id"),
+        "refundFollowUpRequired": follow_up,
+        "message": message,
+    }
+
+
+def _deactivate_member(member, status, amount):
+    member.status = "INACTIVE"
+    db.session.commit()
+    db.session.refresh(member)
+    return {
+        "memberId": member.id,
+        "memberStatus": member.status,
+        "status": status,
+        "amount": amount,
+        "paymentId": None,
+        "refundFollowUpRequired": False,
+        "message": None,
+    }
+
+
+def _prorated_refund(plan, remaining_days):
+    price = PLAN_PRICES[plan]
+    if remaining_days >= RENEWAL_PERIOD_DAYS:
+        return price
+    amount = price * Decimal(remaining_days) / Decimal(RENEWAL_PERIOD_DAYS)
+    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _validate_member_payload(payload, partial):

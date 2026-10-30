@@ -53,6 +53,8 @@ flask run
 - `GET /api/members` — list all
 - `GET /api/members/:id` — get one (`404` if missing)
 - `PUT /api/members/:id` — partial update
+- `POST /api/members/:id/cancel` — cancels the membership, refunding the unused part of the paid
+  period (`plan price * remainingDays / 30`) through the payments service
 - `DELETE /api/members/:id`
 ## Tests
 

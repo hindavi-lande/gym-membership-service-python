@@ -34,3 +34,23 @@ def post_charge(
     if not isinstance(body, dict):
         body = {}
     return ChargeResult(status_code=response.status_code, body=body)
+
+
+def post_refund(
+    base_url: str,
+    payload: dict,
+    timeout: float = CALL_TIMEOUT_SECONDS,
+) -> ChargeResult:
+    url = f"{base_url}/api/payments/refund"
+    try:
+        response = httpx.post(url, json=payload, timeout=timeout)
+    except httpx.HTTPError as exc:
+        raise PaymentsUnavailable(f"Payments service unreachable: {exc}") from exc
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    return ChargeResult(status_code=response.status_code, body=body)

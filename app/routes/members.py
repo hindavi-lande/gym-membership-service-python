@@ -41,6 +41,11 @@ def renew_member(member_id) -> tuple[Response, int]:
     return jsonify(member.to_dict()), 200
 
 
+@members_bp.post("/members/<int:member_id>/cancel")
+def cancel_member(member_id: int) -> tuple[Response, int]:
+    return jsonify(member_service.cancel_member(member_id)), 200
+
+
 def _json_body():
     body = request.get_json(silent=True)
     return {} if body is None else body
